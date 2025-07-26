@@ -2,8 +2,11 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
+import { AuthProvider } from './contexts/AuthContext';
 import Chat from './chat';
+import BackendStatus from './components/ui/BackendStatus';
 
+// Firebase configuration
 const firebaseConfig = {
   apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
   authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
@@ -13,17 +16,28 @@ const firebaseConfig = {
   appId: process.env.REACT_APP_FIREBASE_APP_ID
 };
 
+// Initialize Firebase
 initializeApp(firebaseConfig);
 
 const App = () => {
   const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
   const auth = getAuth();
 
   useEffect(() => {
+    let isMounted = true;
+    
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
+      if (isMounted) {
+        setUser(user);
+        setLoading(false);
+      }
     });
-    return () => unsubscribe();
+    
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, [auth]);
 
   // Coin animation effect
@@ -122,7 +136,7 @@ const App = () => {
     try {
       await signInWithPopup(auth, provider);
     } catch (error) {
-      console.error(error);
+      console.error('Login error:', error);
     }
   };
 
@@ -130,25 +144,44 @@ const App = () => {
     try {
       await signOut(auth);
     } catch (error) {
-      console.error(error);
+      console.error('Logout error:', error);
     }
   };
 
-  return (
-    <div className="relative min-h-screen overflow-hidden">
-      {/* Animated Gradient Background */}
-      <div className="fixed inset-0 bg-gradient-animation z-0"></div>
-      
-      {/* Floating Coins */}
-      <canvas 
-        id="coins" 
-        className="fixed inset-0 z-0"
-        style={{ pointerEvents: 'none' }}
-      ></canvas>
+  // Show loading screen
+  if (loading) {
+    return (
+      <div className="relative min-h-screen overflow-hidden">
+        <div className="fixed inset-0 bg-gradient-animation z-0"></div>
+        <div className="relative z-10 min-h-screen flex items-center justify-center">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+            <h1 className="text-2xl font-bold text-white mb-2">💰 FiNIX</h1>
+            <p className="text-white/80">Loading your financial assistant...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-      {/* Main Content */}
-      <div className="relative z-10 min-h-screen p-6 font-sans flex items-center justify-center">
-        {/* <div className="max-w-5xl w-full min-h-[70vh] flex flex-col justify-center items-center mx-auto rounded-lg shadow-xl bg-white/90 backdrop-blur-md p-8"> */}
+  return (
+    <AuthProvider>
+      <div className="relative min-h-screen overflow-hidden">
+        {/* Backend Status Indicator */}
+        <BackendStatus />
+        
+        {/* Animated Gradient Background */}
+        <div className="fixed inset-0 bg-gradient-animation z-0"></div>
+        
+        {/* Floating Coins */}
+        <canvas 
+          id="coins" 
+          className="fixed inset-0 z-0"
+          style={{ pointerEvents: 'none' }}
+        ></canvas>
+
+        {/* Main Content */}
+        <div className="relative z-10 min-h-screen p-6 font-sans flex items-center justify-center">
           {!user ? (
             <div className="flex flex-col items-center w-full space-y-6">
               <h1 className="text-4xl font-extrabold text-indigo-800 text-center">💰 FiNIX: Talk to Your Money</h1>
@@ -171,12 +204,12 @@ const App = () => {
                   Logout
                 </button>
               </div>
-              <Chat user={user} />
+              <Chat />
             </>
           )}
-        {/* </div> */}
+        </div>
       </div>
-    </div>
+    </AuthProvider>
   );
 };
 
