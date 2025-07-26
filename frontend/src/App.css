@@ -36,3 +36,58 @@
     transform: rotate(360deg);
   }
 }
+/* Animated Gradient Background */
+/* Animated Gradient Background */
+.bg-gradient-animation {
+  background: linear-gradient(-45deg, #6366f1, #8b5cf6, #ec4899, #f43f5e, #f59e0b);
+  background-size: 400% 400%;
+  animation: gradientFlow 15s ease infinite;
+  opacity: 0.8;
+}
+
+@keyframes gradientFlow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* Smooth transitions for buttons */
+button {
+  transition: all 0.3s ease;
+}
+
+button:hover {
+  transform: scale(1.05);
+}
+
+/* Ensure canvas doesn't interfere with interactions */
+#coins {
+  pointer-events: none;
+}
+
+/* Additional styling for better visual appeal */
+.backdrop-blur-md {
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.shadow-xl {
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .text-4xl {
+    font-size: 2rem;
+  }
+  
+  .p-8 {
+    padding: 1.5rem;
+  }
+}
