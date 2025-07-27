@@ -3,7 +3,7 @@ const router = express.Router();
 const Joi = require('joi');
 const { authenticateUser, getCurrentUser } = require('../middleware/auth');
 const fiMcpService = require('../services/fiMcpService');
-const { getAuthenticationStatus } = require('../services/geminiService');
+const geminiService = require('../services/geminiService');
 const logger = require('../utils/logger');
 
 /**
@@ -14,10 +14,14 @@ const logger = require('../utils/logger');
 // Validation schemas
 const phoneSchema = Joi.object({
   phoneNumber: Joi.string()
-    .pattern(/^\+?[1-9]\d{1,14}$/)
+    .min(10)
+    .max(15)
+    .pattern(/^[\d\s\+\-\(\)]+$/)
     .required()
     .messages({
-      'string.pattern.base': 'Please provide a valid phone number',
+      'string.pattern.base': 'Please provide a valid phone number (only digits, spaces, +, -, and parentheses allowed)',
+      'string.min': 'Phone number must be at least 10 digits',
+      'string.max': 'Phone number must be at most 15 digits',
       'any.required': 'Phone number is required'
     })
 });
@@ -39,7 +43,7 @@ const passcodeSchema = Joi.object({
 router.get('/status', authenticateUser, async (req, res) => {
   try {
     const user = getCurrentUser(req);
-    const fiMcpStatus = getAuthenticationStatus(user.uid);
+    const fiMcpStatus = geminiService.getAuthenticationStatus(user.uid);
 
     logger.logUserAction(user.uid, 'auth_status_check', {
       firebaseAuth: true,
@@ -78,9 +82,13 @@ router.get('/status', authenticateUser, async (req, res) => {
  */
 router.post('/fi-mcp/initiate', authenticateUser, async (req, res) => {
   try {
+    console.log('Received request body:', req.body);
+    console.log('Phone number received:', req.body.phoneNumber);
+    
     // Validate request body
     const { error, value } = phoneSchema.validate(req.body);
     if (error) {
+      console.log('Validation error:', error.details[0]);
       return res.status(400).json({
         error: 'Validation Error',
         message: error.details[0].message,
@@ -93,6 +101,7 @@ router.post('/fi-mcp/initiate', authenticateUser, async (req, res) => {
 
     // Sanitize phone number
     const cleanPhoneNumber = phoneNumber.replace(/\s+/g, '');
+    console.log('Clean phone number:', cleanPhoneNumber);
 
     logger.logUserAction(user.uid, 'fi_mcp_auth_initiate', { 
       phoneNumber: cleanPhoneNumber.substring(0, 6) + '...' 
@@ -216,6 +225,70 @@ router.get('/fi-mcp/status', authenticateUser, async (req, res) => {
     res.status(500).json({
       error: 'Status Check Failed',
       message: 'Unable to check Fi MCP authentication status'
+    });
+  }
+});
+
+/**
+ * GET /api/auth/fi-mcp/mcp-status
+ * Check MCP server connection and status
+ */
+router.get('/fi-mcp/mcp-status', authenticateUser, async (req, res) => {
+  try {
+    const user = getCurrentUser(req);
+    
+    console.log('=== MCP SERVER STATUS CHECK ===');
+    console.log('User requesting MCP status:', user.uid);
+    
+    // Test MCP server connection
+    const mcpStatus = await fiMcpService.testMcpConnection();
+    
+    // Get local storage status
+    const localData = fiMcpService.queryStoredData(user.uid);
+    
+    res.json({
+      success: true,
+      userId: user.uid,
+      mcpServer: mcpStatus,
+      localStorage: localData,
+      message: 'MCP server status retrieved successfully'
+    });
+
+  } catch (error) {
+    logger.error('MCP server status check failed:', error);
+    res.status(500).json({
+      error: 'MCP Status Check Failed',
+      message: 'Unable to check MCP server status'
+    });
+  }
+});
+
+/**
+ * GET /api/auth/fi-mcp/query-data
+ * Query stored phone number data (for debugging/verification)
+ */
+router.get('/fi-mcp/query-data', authenticateUser, async (req, res) => {
+  try {
+    const user = getCurrentUser(req);
+    
+    console.log('=== API QUERY REQUEST ===');
+    console.log('User requesting data:', user.uid);
+    
+    // Query the stored data
+    const storedData = fiMcpService.queryStoredData(user.uid);
+    
+    res.json({
+      success: true,
+      userId: user.uid,
+      storedData,
+      message: 'Stored data retrieved successfully'
+    });
+
+  } catch (error) {
+    logger.error('Fi MCP data query failed:', error);
+    res.status(500).json({
+      error: 'Query Failed',
+      message: 'Unable to query stored data'
     });
   }
 });

@@ -5,8 +5,9 @@ import React, { useState } from 'react';
  * Handles message input with validation and responsive design
  */
 
-const ChatInput = ({ message, setMessage, onSend, loading, disabled }) => {
-  const [error, setError] = useState('');
+const ChatInput = ({ onSendMessage, loading, error }) => {
+  const [message, setMessage] = useState('');
+  const [localError, setLocalError] = useState('');
 
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -20,18 +21,19 @@ const ChatInput = ({ message, setMessage, onSend, loading, disabled }) => {
     
     // Validation
     if (!trimmedMessage) {
-      setError('Please enter a message');
+      setLocalError('Please enter a message');
       return;
     }
 
     if (trimmedMessage.length > 2000) {
-      setError('Message is too long (max 2000 characters)');
+      setLocalError('Message is too long (max 2000 characters)');
       return;
     }
 
     // Clear error and send
-    setError('');
-    onSend();
+    setLocalError('');
+    onSendMessage(trimmedMessage);
+    setMessage(''); // Clear input after sending
   };
 
   const handleInputChange = (e) => {
@@ -39,17 +41,17 @@ const ChatInput = ({ message, setMessage, onSend, loading, disabled }) => {
     setMessage(value);
     
     // Clear error when user starts typing
-    if (error) {
-      setError('');
+    if (localError) {
+      setLocalError('');
     }
   };
 
   return (
     <div className="space-y-2">
       {/* Error Display */}
-      {error && (
+      {(localError || error) && (
         <div className="text-red-600 text-sm px-2">
-          {error}
+          {localError || error}
         </div>
       )}
 
@@ -63,7 +65,7 @@ const ChatInput = ({ message, setMessage, onSend, loading, disabled }) => {
             onKeyPress={handleKeyPress}
             placeholder="💬 Ask me anything about your finances..."
             className="w-full border border-indigo-300 focus:ring-2 focus:ring-indigo-400 focus:outline-none rounded-full px-4 py-2 pr-12 disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={loading || disabled}
+            disabled={loading}
             maxLength={2000}
           />
           
@@ -77,7 +79,7 @@ const ChatInput = ({ message, setMessage, onSend, loading, disabled }) => {
 
         <button 
           onClick={handleSend}
-          disabled={loading || disabled || !message.trim()}
+          disabled={loading || !message.trim()}
           className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-full font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 min-w-[80px] justify-center"
         >
           {loading ? (

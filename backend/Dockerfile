@@ -37,18 +37,18 @@ RUN rm -rf README.md .env.example .gitignore
 
 # Set environment variables
 ENV NODE_ENV=production
-ENV PORT=8080
+ENV PORT=8081
 
 # Switch to non-root user
 USER finix
 
 # Expose port
-EXPOSE 8080
+EXPOSE 8081
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD node -e "const http = require('http'); \
-    const options = { host: 'localhost', port: 8080, path: '/health', timeout: 2000 }; \
+    const options = { host: 'localhost', port: 8081, path: '/health', timeout: 2000 }; \
     const request = http.request(options, (res) => { \
       if (res.statusCode === 200) process.exit(0); \
       else process.exit(1); \

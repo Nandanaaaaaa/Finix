@@ -47,11 +47,13 @@ const BackendStatus = () => {
   const getStatusText = () => {
     switch (status) {
       case 'connected':
-        return '✅ Backend Connected';
+        console.log('✅ Backend Connected');
+        break;
       case 'error':
-        return '❌ Backend Error';
+        console.log('❌ Backend Error');
+        break;
       default:
-        return '⏳ Checking Backend...';
+        console.log('⏳ Checking Backend...');
     }
   };
 

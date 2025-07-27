@@ -1,181 +1,133 @@
 // frontend/src/Chat.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from './contexts/AuthContext';
-import { sendMessage, clearChatHistory } from './services/api';
-import AuthStatusCard from './components/auth/AuthStatusCard';
+import { sendMessage, getChatSuggestions } from './services/api';
 import FiMcpAuthModal from './components/auth/FiMcpAuthModal';
-import ChatHistory from './components/chat/ChatHistory';
-import ChatInput from './components/chat/ChatInput';
 import MessageSuggestions from './components/chat/MessageSuggestions';
+import AuthStatusCard from './components/auth/AuthStatusCard';
+import ChatInput from './components/chat/ChatInput';
+import ChatHistory from './components/chat/ChatHistory';
 
-/**
- * Enhanced Chat Component
- * Integrates with backend API, authentication, and provides enhanced chat experience
- */
-
-const Chat = () => {
-  const { user, canAccessFinancialData, loading: authLoading } = useAuth();
-  
+const ChatPage = () => {
+  const { user, fiMcpSession, logout } = useAuth();
   const [messages, setMessages] = useState([]);
-  const [currentMessage, setCurrentMessage] = useState('');
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [showFiMcpModal, setShowFiMcpModal] = useState(false);
+  const chatEndRef = useRef(null);
 
-  // Handle sending message
-  const handleSendMessage = async () => {
-    if (!currentMessage.trim() || loading) return;
+  // Scroll to bottom of chat
+  const scrollToBottom = useCallback(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
 
-    const userMessage = {
-      sender: 'user',
-      text: currentMessage.trim(),
-      timestamp: new Date().toISOString()
-    };
-
-    // Add user message to chat
-    setMessages(prev => [...prev, userMessage]);
-    setCurrentMessage('');
-    setLoading(true);
-    setError(null);
+  // Send message handler
+  const handleSendMessage = useCallback(async (message) => {
+    if (!message.trim()) return;
 
     try {
-      // Convert messages to backend format
-      const chatHistory = messages.map(msg => ({
-        role: msg.sender === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.text }]
-      }));
+      setLoading(true);
+      setError(null);
+
+      // Add user message to chat
+      const userMessage = { 
+        sender: 'user', 
+        content: message, 
+        timestamp: new Date().toISOString() 
+      };
+      setMessages(prevMessages => [...prevMessages, userMessage]);
 
       // Send message to backend
-      const response = await sendMessage(currentMessage.trim(), chatHistory);
-      
+      const response = await sendMessage(message, messages);
+
       // Add AI response to chat
-      const aiMessage = {
-        sender: 'ai',
-        text: response.response || 'I apologize, but I couldn\'t process your request.',
-        timestamp: new Date().toISOString()
+      const aiMessage = { 
+        sender: 'ai', 
+        content: response.message, 
+        timestamp: new Date().toISOString(),
+        functionCalled: response.functionCalled,
+        data: response.data
       };
+      setMessages(prevMessages => [...prevMessages, aiMessage]);
 
-      setMessages(prev => [...prev, aiMessage]);
-
-    } catch (error) {
-      console.error('Error sending message:', error);
-      
-      // Add error message
-      const errorMessage = {
-        sender: 'ai',
-        text: error.message || 'Sorry, I encountered an error processing your request. Please try again.',
-        timestamp: new Date().toISOString()
-      };
-
-      setMessages(prev => [...prev, errorMessage]);
-      setError(error.message);
+      scrollToBottom();
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [messages, scrollToBottom]);
 
-  // Handle suggestion click
-  const handleSuggestionClick = (suggestion) => {
-    setCurrentMessage(suggestion);
+  // Handle logout
+  const handleLogout = () => {
+    logout();
   };
-
-  // Handle clearing chat history
-  const handleClearHistory = async () => {
-    try {
-      await clearChatHistory();
-      setMessages([]);
-      setError(null);
-    } catch (error) {
-      console.error('Error clearing chat history:', error);
-      setError('Failed to clear chat history');
-    }
-  };
-
-  // Handle connecting Fi MCP
-  const handleConnectFiMcp = () => {
-    setShowFiMcpModal(true);
-  };
-
-  // Handle Fi MCP modal close
-  const handleFiMcpModalClose = () => {
-    setShowFiMcpModal(false);
-  };
-
-  // Show loading state while auth is initializing
-  if (authLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading chat...</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      {/* Authentication Status Card */}
-      <AuthStatusCard onConnectFiMcp={handleConnectFiMcp} />
-
-      {/* Error Display */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <div className="flex items-center space-x-2">
-            <span className="text-red-600">⚠️</span>
-            <span className="text-red-800 font-medium">Error</span>
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      {/* Header */}
+      <header className="bg-white shadow-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+          <div className="flex items-center space-x-4">
+            <h1 className="text-2xl font-bold text-gray-900">FiNIX</h1>
+            <span className="text-sm text-gray-500">AI Financial Assistant</span>
           </div>
-          <p className="text-red-700 text-sm mt-1">{error}</p>
-          <button
-            onClick={() => setError(null)}
-            className="text-red-600 hover:text-red-800 text-sm mt-2"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {/* Chat Container */}
-      <div className="bg-white shadow-md rounded-lg p-4 border border-indigo-200">
-        {/* Chat Header */}
-        <div className="flex justify-between items-center mb-4 pb-3 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-800 flex items-center">
-            💬 Financial Assistant
-          </h2>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={handleClearHistory}
-              className="text-sm text-gray-600 hover:text-gray-800 transition-colors"
-              title="Clear chat history"
-            >
-              🗑️ Clear
-            </button>
+          <div className="flex items-center space-x-4">
+            {user && (
+              <button 
+                onClick={handleLogout}
+                className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors"
+              >
+                Logout
+              </button>
+            )}
           </div>
         </div>
+      </header>
 
-        {/* Message Suggestions */}
-        <MessageSuggestions onSuggestionClick={handleSuggestionClick} />
+      {/* Main Content */}
+      <main className="flex-grow container mx-auto px-4 sm:px-6 lg:px-8 py-8 grid grid-cols-1 md:grid-cols-3 gap-8">
+        {/* Authentication Status Column */}
+        <div className="md:col-span-1">
+          <AuthStatusCard 
+            onConnectFiMoney={() => setIsAuthModalOpen(true)}
+          />
+        </div>
 
-        {/* Chat History */}
-        <ChatHistory messages={messages} loading={loading} />
+        {/* Chat Column */}
+        <div className="md:col-span-2 bg-white rounded-xl shadow-lg border border-gray-100 flex flex-col">
+          {/* Chat History */}
+          <div className="flex-grow overflow-y-auto p-6 space-y-4">
+            {messages.length === 0 ? (
+              <div className="text-center text-gray-400 py-12">
+                <p className="text-xl mb-4">Welcome to FiNIX</p>
+                <p>Start a conversation about your finances</p>
+                <MessageSuggestions onSuggestionClick={handleSendMessage} />
+              </div>
+            ) : (
+              <ChatHistory messages={messages} />
+            )}
+            <div ref={chatEndRef} />
+          </div>
 
-        {/* Chat Input */}
-        <ChatInput
-          message={currentMessage}
-          setMessage={setCurrentMessage}
-          onSend={handleSendMessage}
-          loading={loading}
-          disabled={!user}
-        />
-      </div>
+          {/* Chat Input */}
+          <div className="border-t border-gray-100 p-4">
+            <ChatInput 
+              onSendMessage={handleSendMessage} 
+              loading={loading}
+              error={error}
+            />
+          </div>
+        </div>
+      </main>
 
-      {/* Fi MCP Authentication Modal */}
+      {/* Authentication Modal */}
       <FiMcpAuthModal 
-        isOpen={showFiMcpModal} 
-        onClose={handleFiMcpModalClose} 
+        isOpen={isAuthModalOpen} 
+        onClose={() => setIsAuthModalOpen(false)} 
       />
     </div>
   );
 };
 
-export default Chat;
+export default ChatPage;

@@ -1,57 +1,68 @@
 /**
- * Environment Configuration
- * Centralized configuration for environment variables with fallbacks
+ * Environment Configuration for FiNIX Frontend
+ * Centralized configuration management with validation
  */
 
-const config = {
-  // Backend API URL
-  API_URL: process.env.REACT_APP_API_URL || 'http://localhost:8080',
+const environment = {
+  // API Configuration
+  API_URL: process.env.REACT_APP_API_URL || 'http://localhost:8081',
   
   // Firebase Configuration
   FIREBASE: {
-    API_KEY: process.env.REACT_APP_FIREBASE_API_KEY,
-    AUTH_DOMAIN: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
-    PROJECT_ID: process.env.REACT_APP_FIREBASE_PROJECT_ID,
-    STORAGE_BUCKET: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
-    MESSAGING_SENDER_ID: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
-    APP_ID: process.env.REACT_APP_FIREBASE_APP_ID
+    apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
+    authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
+    projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
+    storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.REACT_APP_FIREBASE_APP_ID
   },
-  
+
   // App Configuration
   APP: {
-    NAME: process.env.REACT_APP_NAME || 'FiNIX AI Assistant',
-    VERSION: process.env.REACT_APP_VERSION || '1.0.0',
-    ENVIRONMENT: process.env.REACT_APP_ENVIRONMENT || 'development'
+    name: 'FiNIX',
+    version: '1.0.0',
+    description: 'AI-powered financial assistant with Fi Money integration'
   },
-  
+
   // Feature Flags
   FEATURES: {
-    ENABLE_VOICE_INPUT: process.env.REACT_APP_ENABLE_VOICE_INPUT === 'true',
-    ENABLE_CHARTS: process.env.REACT_APP_ENABLE_CHARTS !== 'false',
-    ENABLE_EXPORT: process.env.REACT_APP_ENABLE_EXPORT === 'true'
+    enableChat: true,
+    enableFiMcpAuth: true,
+    enableSuggestions: true,
+    enableErrorReporting: true
+  },
+
+  // Development Settings
+  DEVELOPMENT: {
+    enableDebugLogs: process.env.NODE_ENV === 'development',
+    enableMockData: false,
+    enablePerformanceMonitoring: true
   }
 };
 
-// Validation
-const validateConfig = () => {
-  const required = [
-    'FIREBASE.API_KEY',
-    'FIREBASE.AUTH_DOMAIN',
-    'FIREBASE.PROJECT_ID'
-  ];
-  
-  const missing = required.filter(key => {
-    const value = key.split('.').reduce((obj, k) => obj?.[k], config);
-    return !value;
-  });
-  
-  if (missing.length > 0) {
-    console.warn('Missing environment variables:', missing);
-    console.warn('Please check your .env file configuration');
-  }
-};
+// Validate required environment variables
+const requiredEnvVars = [
+  'REACT_APP_FIREBASE_API_KEY',
+  'REACT_APP_FIREBASE_AUTH_DOMAIN',
+  'REACT_APP_FIREBASE_PROJECT_ID',
+  'REACT_APP_FIREBASE_STORAGE_BUCKET',
+  'REACT_APP_FIREBASE_MESSAGING_SENDER_ID',
+  'REACT_APP_FIREBASE_APP_ID'
+];
 
-// Validate on import
-validateConfig();
+const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
-export default config; 
+if (missingVars.length > 0) {
+  console.warn('Missing required environment variables:', missingVars);
+  console.warn('Please check your .env file and ensure all required variables are set.');
+}
+
+// Validate Firebase project ID matches backend
+if (process.env.REACT_APP_FIREBASE_PROJECT_ID !== 'finix-467107') {
+  console.warn('Firebase project ID mismatch!');
+  console.warn('Frontend project ID:', process.env.REACT_APP_FIREBASE_PROJECT_ID);
+  console.warn('Expected project ID: finix-467107');
+  console.warn('Please update your .env file to use the correct Firebase project.');
+}
+
+export default environment; 

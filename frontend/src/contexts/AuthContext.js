@@ -1,203 +1,234 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import React, { createContext, useState, useContext, useCallback, useRef, useEffect } from 'react';
 import { 
-  getAuthStatus, 
-  getFiMcpStatus, 
-  initiateFiMcpAuth, 
-  completeFiMcpAuth, 
-  disconnectFiMcp,
-  updateAuthToken 
+  initiatePhoneFiMcp, 
+  completePhoneFiMcp, 
+  getAuthStatus 
 } from '../services/api';
-
-/**
- * Authentication Context
- * Manages Firebase and Fi MCP authentication state
- */
+import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
 
 const AuthContext = createContext();
 
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-};
-
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [authStatus, setAuthStatus] = useState({
-    firebase: { authenticated: false },
-    fiMcp: { authenticated: false }
-  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  
-  // Use refs to prevent infinite loops
-  const lastRefreshRef = useRef(0);
+  const [fiMcpSession, setFiMcpSession] = useState(null);
+
+  // Refs to prevent multiple simultaneous calls
+  const lastRefreshRef = useRef(null);
   const isInitializedRef = useRef(false);
 
-  const auth = getAuth();
-
-  // Refresh authentication status from backend with debouncing
-  const refreshAuthStatus = useCallback(async (force = false) => {
-    const now = Date.now();
-    const timeSinceLastRefresh = now - lastRefreshRef.current;
+  // Authentication state listener
+  useEffect(() => {
+    const auth = getAuth();
     
-    // Prevent too frequent calls (minimum 5 seconds between calls)
-    if (!force && timeSinceLastRefresh < 5000) {
+    // Set up auth state listener
+    const unsubscribe = onAuthStateChanged(
+      auth, 
+      async (currentUser) => {
+        try {
+          setLoading(true);
+          
+          if (currentUser) {
+            // User is signed in
+            setUser({
+              uid: currentUser.uid,
+              email: currentUser.email,
+              displayName: currentUser.displayName,
+              photoURL: currentUser.photoURL,
+              emailVerified: currentUser.emailVerified
+            });
+
+            // Attempt to get auth status from backend
+            try {
+              const status = await getAuthStatus();
+              
+              // Update Fi MCP session if authenticated
+              if (status.fiMcp.authenticated) {
+                setFiMcpSession({
+                  ...fiMcpSession,
+                  authenticated: true
+                });
+              }
+            } catch (authStatusError) {
+              console.error('Failed to get auth status:', authStatusError);
+            }
+          } else {
+            // User is signed out
+            setUser(null);
+            setFiMcpSession(null);
+          }
+        } catch (error) {
+          console.error('Authentication state change error:', error);
+          setError(error.message);
+        } finally {
+          setLoading(false);
+        }
+      },
+      (error) => {
+        console.error('Auth state change error:', error);
+        setError(error.message);
+        setLoading(false);
+      }
+    );
+
+    // Cleanup subscription on unmount
+    return () => unsubscribe();
+  }, []);
+
+  // Store Fi MCP session in localStorage
+  const storeFiMcpSession = useCallback((sessionData) => {
+    try {
+      localStorage.setItem('fiMcpSession', JSON.stringify(sessionData));
+      setFiMcpSession(sessionData);
+    } catch (error) {
+      console.error('Error storing Fi MCP session:', error);
+    }
+  }, []);
+
+  // Retrieve Fi MCP session from localStorage
+  const retrieveFiMcpSession = useCallback(() => {
+    try {
+      const storedSession = localStorage.getItem('fiMcpSession');
+      if (storedSession) {
+        const parsedSession = JSON.parse(storedSession);
+        setFiMcpSession(parsedSession);
+        return parsedSession;
+      }
+    } catch (error) {
+      console.error('Error retrieving Fi MCP session:', error);
+    }
+    return null;
+  }, []);
+
+  // Comprehensive logout method
+  const logout = useCallback(async () => {
+    try {
+      setLoading(true);
+      
+      // Firebase logout
+      const auth = getAuth();
+      await signOut(auth);
+
+      // Clear authentication states
+      setUser(null);
+      setFiMcpSession(null);
+      setError(null);
+
+      // Clear localStorage
+      localStorage.removeItem('fiMcpSession');
+      
+    } catch (err) {
+      console.error('Logout error:', err);
+      setError('Failed to logout. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Start Fi MCP authentication
+  const startFiMcpAuth = useCallback(async (phoneNumber) => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const result = await initiatePhoneFiMcp(phoneNumber);
+      
+      if (result && result.data) {
+        // Store session information
+        storeFiMcpSession({
+          phoneNumber,
+          loginUrl: result.data.loginUrl,
+          sessionId: result.data.sessionId
+        });
+
+        return result;
+      } else {
+        throw new Error('Invalid authentication response');
+      }
+    } catch (err) {
+      setError(err.message || 'Authentication failed');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, [storeFiMcpSession]);
+
+  // Complete Fi MCP authentication
+  const finishFiMcpAuth = useCallback(async (passcode) => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const result = await completePhoneFiMcp(passcode);
+      
+      if (result && result.success) {
+        // Update stored session
+        const currentSession = retrieveFiMcpSession() || {};
+        storeFiMcpSession({
+          ...currentSession,
+          authenticated: true
+        });
+
+        return result;
+      } else {
+        throw new Error('Authentication completion failed');
+      }
+    } catch (err) {
+      setError(err.message || 'Authentication completion failed');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, [retrieveFiMcpSession, storeFiMcpSession]);
+
+  // Refresh authentication status
+  const refreshAuthStatus = useCallback(async (force = false) => {
+    // Prevent multiple simultaneous calls
+    const now = Date.now();
+    if (!force && lastRefreshRef.current && 
+        (now - lastRefreshRef.current) < 5000) {
       return;
     }
 
     try {
       setLoading(true);
-      const status = await getAuthStatus();
-      setAuthStatus(status);
-      setError(null);
       lastRefreshRef.current = now;
-    } catch (error) {
-      console.error('Error refreshing auth status:', error);
-      // Don't set error for rate limiting, just log it
-      if (!error.message.includes('Too many requests')) {
-        setError('Failed to get authentication status');
+
+      const status = await getAuthStatus();
+      
+      // Update user and Fi MCP session
+      setUser(status.firebase);
+      
+      // If Fi MCP is authenticated, update session
+      if (status.fiMcp.authenticated) {
+        const currentSession = retrieveFiMcpSession() || {};
+        storeFiMcpSession({
+          ...currentSession,
+          authenticated: true
+        });
       }
+
+      return status;
+    } catch (err) {
+      setError(err.message || 'Failed to refresh authentication status');
+      throw err;
     } finally {
       setLoading(false);
     }
-  }, []); // Empty dependency array to prevent infinite loops
+  }, [retrieveFiMcpSession, storeFiMcpSession]);
 
-  // Initialize Firebase auth state
-  useEffect(() => {
-    let isMounted = true;
-    
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (!isMounted) return;
-      
-      setUser(firebaseUser);
-      
-      if (firebaseUser && !isInitializedRef.current) {
-        try {
-          // Get fresh token and update API service
-          const token = await firebaseUser.getIdToken();
-          updateAuthToken(token);
-          
-          // Get authentication status from backend (force refresh)
-          await refreshAuthStatus(true);
-          isInitializedRef.current = true;
-        } catch (error) {
-          console.error('Error updating auth token:', error);
-          if (isMounted) {
-            setError('Failed to authenticate with backend');
-          }
-        }
-      } else if (!firebaseUser) {
-        // User logged out
-        updateAuthToken(null);
-        isInitializedRef.current = false;
-        if (isMounted) {
-          setAuthStatus({
-            firebase: { authenticated: false },
-            fiMcp: { authenticated: false }
-          });
-        }
-      }
-      
-      if (isMounted) {
-        setLoading(false);
-      }
-    });
-
-    return () => {
-      isMounted = false;
-      unsubscribe();
-    };
-  }, [auth]); // Only depend on auth, not refreshAuthStatus
-
-  // Initiate Fi MCP authentication
-  const startFiMcpAuth = async (phoneNumber) => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      const result = await initiateFiMcpAuth(phoneNumber);
-      
-      // Refresh auth status after initiation
-      await refreshAuthStatus(true);
-      
-      return result;
-    } catch (error) {
-      setError(error.message);
-      throw error;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Complete Fi MCP authentication
-  const finishFiMcpAuth = async (passcode) => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      const result = await completeFiMcpAuth(passcode);
-      
-      // Refresh auth status after completion
-      await refreshAuthStatus(true);
-      
-      return result;
-    } catch (error) {
-      setError(error.message);
-      throw error;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Disconnect Fi MCP
-  const disconnectFiMcpAuth = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      await disconnectFiMcp();
-      
-      // Refresh auth status after disconnection
-      await refreshAuthStatus(true);
-    } catch (error) {
-      setError(error.message);
-      throw error;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Check if user is fully authenticated (Firebase + Fi MCP)
-  const isFullyAuthenticated = () => {
-    return authStatus.firebase.authenticated && authStatus.fiMcp.authenticated;
-  };
-
-  // Check if user can access financial data
-  const canAccessFinancialData = () => {
-    return authStatus.fiMcp.authenticated;
-  };
-
-  // Clear error
-  const clearError = () => {
-    setError(null);
-  };
-
+  // Provide context values
   const value = {
     user,
-    authStatus,
     loading,
     error,
-    isFullyAuthenticated,
-    canAccessFinancialData,
+    fiMcpSession,
     startFiMcpAuth,
     finishFiMcpAuth,
-    disconnectFiMcpAuth,
     refreshAuthStatus,
-    clearError
+    logout,
+    clearError: () => setError(null)
   };
 
   return (
@@ -205,4 +236,13 @@ export const AuthProvider = ({ children }) => {
       {children}
     </AuthContext.Provider>
   );
+};
+
+// Custom hook to use the auth context
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
 }; 

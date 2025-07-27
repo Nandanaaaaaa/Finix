@@ -49,7 +49,7 @@ npm run dev
 
 4. **Test the API:**
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:8081/health
 ```
 
 ## 📚 API Documentation

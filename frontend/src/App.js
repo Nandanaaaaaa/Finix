@@ -1,9 +1,10 @@
 // frontend/src/App.js
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
+import { getAuth, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { AuthProvider } from './contexts/AuthContext';
-import Chat from './chat';
+import { useAuth } from './contexts/AuthContext';
+import ChatPage from './chat';
 import BackendStatus from './components/ui/BackendStatus';
 
 // Firebase configuration
@@ -19,196 +20,83 @@ const firebaseConfig = {
 // Initialize Firebase
 initializeApp(firebaseConfig);
 
-const App = () => {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const auth = getAuth();
-
-  useEffect(() => {
-    let isMounted = true;
-    
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (isMounted) {
-        setUser(user);
-        setLoading(false);
-      }
-    });
-    
-    return () => {
-      isMounted = false;
-      unsubscribe();
-    };
-  }, [auth]);
-
-  // Coin animation effect
-  useEffect(() => {
-    const canvas = document.getElementById('coins');
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
-    const coinsArray = [];
-    const coinCount = 50;
-    
-    // Unicode coin symbols
-    const coinSymbols = ['₿', 'Ξ', 'Ł', '$', '€', '£', '₹', '¥', '¢'];
-
-    class Coin {
-      constructor() {
-        this.x = Math.random() * canvas.width;
-        this.y = Math.random() * canvas.height;
-        this.size = Math.random() * 20 + 15;
-        this.speedX = (Math.random() - 0.5) * 2;
-        this.speedY = (Math.random() - 0.5) * 2;
-        this.symbol = coinSymbols[Math.floor(Math.random() * coinSymbols.length)];
-        this.rotation = Math.random() * Math.PI * 2;
-        this.rotationSpeed = (Math.random() - 0.5) * 0.05;
-        this.opacity = Math.random() * 0.5 + 0.3;
-      }
-
-      update() {
-        this.x += this.speedX;
-        this.y += this.speedY;
-        this.rotation += this.rotationSpeed;
-
-        // Bounce off edges
-        if (this.x > canvas.width || this.x < 0) this.speedX *= -1;
-        if (this.y > canvas.height || this.y < 0) this.speedY *= -1;
-
-        // Keep within bounds
-        this.x = Math.max(0, Math.min(canvas.width, this.x));
-        this.y = Math.max(0, Math.min(canvas.height, this.y));
-      }
-
-      draw() {
-        ctx.save();
-        ctx.globalAlpha = this.opacity;
-        ctx.font = `${this.size}px Arial`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        
-        // Add subtle shadow
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
-        ctx.shadowBlur = 3;
-        ctx.shadowOffsetX = 2;
-        ctx.shadowOffsetY = 2;
-        
-        ctx.translate(this.x, this.y);
-        ctx.rotate(this.rotation);
-        ctx.fillText(this.symbol, 0, 0);
-        ctx.restore();
-      }
-    }
-
-    const init = () => {
-      for (let i = 0; i < coinCount; i++) {
-        coinsArray.push(new Coin());
-      }
-    };
-
-    const animate = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      for (let i = 0; i < coinsArray.length; i++) {
-        coinsArray[i].update();
-        coinsArray[i].draw();
-      }
-      requestAnimationFrame(animate);
-    };
-
-    init();
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resizeCanvas);
-    };
-  }, []);
-
-  const handleLogin = async () => {
-    const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error('Login error:', error);
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.error('Logout error:', error);
-    }
-  };
+// Wrapper component to use AuthContext hooks
+const AppContent = () => {
+  const { user, loading, logout } = useAuth();
 
   // Show loading screen
   if (loading) {
     return (
-      <div className="relative min-h-screen overflow-hidden">
-        <div className="fixed inset-0 bg-gradient-animation z-0"></div>
-        <div className="relative z-10 min-h-screen flex items-center justify-center">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
-            <h1 className="text-2xl font-bold text-white mb-2">💰 FiNIX</h1>
-            <p className="text-white/80">Loading your financial assistant...</p>
-          </div>
+      <div className="relative min-h-screen bg-gradient-to-br from-indigo-500 to-purple-600 overflow-hidden flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+          <h1 className="text-2xl font-bold text-white mb-2">💰 FiNIX</h1>
+          <p className="text-white/80">Loading your financial assistant...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <AuthProvider>
-      <div className="relative min-h-screen overflow-hidden">
-        {/* Backend Status Indicator */}
-        <BackendStatus />
-        
-        {/* Animated Gradient Background */}
-        <div className="fixed inset-0 bg-gradient-animation z-0"></div>
-        
-        {/* Floating Coins */}
-        <canvas 
-          id="coins" 
-          className="fixed inset-0 z-0"
-          style={{ pointerEvents: 'none' }}
-        ></canvas>
+    <div className="relative min-h-screen bg-gray-50 overflow-hidden">
+      {/* Backend Status Indicator */}
+      <BackendStatus />
+      
+      {/* Floating Coins */}
+      <canvas 
+        id="coins" 
+        className="fixed inset-0 z-0"
+        style={{ pointerEvents: 'none' }}
+      ></canvas>
 
-        {/* Main Content */}
-        <div className="relative z-10 min-h-screen p-6 font-sans flex items-center justify-center">
-          {!user ? (
-            <div className="flex flex-col items-center w-full space-y-6">
-              <h1 className="text-4xl font-extrabold text-indigo-800 text-center">💰 FiNIX: Talk to Your Money</h1>
+      {/* Main Content */}
+      <div className="relative z-10 min-h-screen">
+        {!user ? (
+          <div className="min-h-screen flex items-center justify-center px-4">
+            <div className="max-w-md w-full space-y-8 bg-white shadow-xl rounded-xl p-8 text-center">
+              <h1 className="text-4xl font-extrabold text-indigo-800">💰 FiNIX</h1>
+              <p className="text-gray-600 mb-6">Talk to Your Money: Your AI Financial Assistant</p>
+              
               <button
-                onClick={handleLogin}
-                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-all duration-300 transform hover:scale-105"
+                onClick={() => {
+                  const provider = new GoogleAuthProvider();
+                  const auth = getAuth();
+                  signInWithPopup(auth, provider).catch(console.error);
+                }}
+                className="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors duration-300 flex items-center justify-center space-x-2"
               >
-                Login with Google
-              </button>
-              <p className="text-center text-gray-700 text-lg italic">🔒 Please login to use the chat.</p>
-            </div>
-          ) : (
-            <>
-              <div className="flex justify-between items-center w-full mb-6 border-b pb-4">
-                <h1 className="text-4xl font-extrabold text-indigo-800">💰 FiNIX: Talk to Your Money</h1>
-                <button
-                  onClick={handleLogout}
-                  className="px-5 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-semibold transition-all duration-300 transform hover:scale-105"
+                <svg 
+                  className="w-6 h-6" 
+                  xmlns="http://www.w3.org/2000/svg" 
+                  viewBox="0 0 48 48" 
+                  width="48px" 
+                  height="48px"
                 >
-                  Logout
-                </button>
-              </div>
-              <Chat />
-            </>
-          )}
-        </div>
+                  <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
+                  <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
+                  <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
+                  <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
+                </svg>
+                <span>Login with Google</span>
+              </button>
+              
+              <p className="text-xs text-gray-500 mt-4">
+                🔒 Secure login powered by Google
+              </p>
+            </div>
+          </div>
+        ) : (
+          <ChatPage />
+        )}
       </div>
+    </div>
+  );
+};
+
+const App = () => {
+  return (
+    <AuthProvider>
+      <AppContent />
     </AuthProvider>
   );
 };

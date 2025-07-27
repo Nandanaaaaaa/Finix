@@ -3,71 +3,109 @@ const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
 const logger = require('../utils/logger');
 
 /**
- * Fi MCP Service - Handles integration with Fi Money's Model Context Protocol API
- * Manages authentication, passcode flow, and financial data retrieval
- * Based on Fi MCP documentation: https://fi.money/features/getting-started-with-fi-mcp
+ * Fi MCP Service - Handles integration with Fi Money's Model Context Protocol
+ * Based on official documentation: https://fi.money/features/getting-started-with-fi-mcp
+ * 
+ * This service connects to the Fi MCP Development Server for testing
  */
 
 class FiMcpService {
   constructor() {
-    this.mcpEndpoint = process.env.FI_MCP_ENDPOINT || 'https://mcp.fi.money:8080/mcp/stream';
+    // Fi MCP Development Server endpoint
+    this.mcpEndpoint = 'http://localhost:8080/mcp/stream';
     this.secretManagerClient = new SecretManagerServiceClient();
-    this.userTokens = new Map(); // In-memory store for user tokens (30-min expiry)
-    this.tokenExpiry = 30 * 60 * 1000; // 30 minutes in milliseconds
+    this.userSessions = new Map(); // Store session IDs for users
+    this.sessionExpiry = 30 * 60 * 1000; // 30 minutes
+    
+    // Clean up expired sessions every 5 minutes
+    setInterval(() => this.cleanupExpiredSessions(), 5 * 60 * 1000);
+  }
+
+  /**
+   * Generate a unique session ID for MCP connection
+   */
+  generateSessionId() {
+    return `mcp-session-${require('crypto').randomUUID()}`;
+  }
+
+  /**
+   * Make MCP protocol call to the Fi MCP server
+   */
+  async makeMcpCall(sessionId, method, params = {}) {
+    try {
+      const payload = {
+        jsonrpc: "2.0",
+        id: Date.now(),
+        method: method,
+        params: params
+      };
+
+      const response = await axios.post(this.mcpEndpoint, payload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Mcp-Session-Id': sessionId
+        },
+        timeout: 30000
+      });
+
+      return response.data;
+    } catch (error) {
+      logger.error('MCP call failed:', error.response?.data || error.message);
+      throw new Error(`MCP call failed: ${error.response?.data?.error?.message || error.message}`);
+    }
   }
 
   /**
    * Initiate Fi MCP authentication flow
-   * @param {string} userId - User ID from Firebase
-   * @param {string} phoneNumber - Fi registered phone number
-   * @returns {Object} Response with login URL and instructions
+   * Creates a session and returns login URL
    */
   async initiateAuthentication(userId, phoneNumber) {
     try {
       logger.logFiMCPInteraction(userId, 'initiate_auth', { phoneNumber });
 
-      // Validate phone number format (basic validation)
+      // Validate phone number format
       if (!phoneNumber || !/^\+?[1-9]\d{1,14}$/.test(phoneNumber.replace(/\s+/g, ''))) {
-        throw new Error('Invalid phone number format');
+        throw new Error('Invalid phone number format. Please enter a valid phone number.');
       }
 
-      // Step 1: Request authentication with Fi MCP
-      const authResponse = await axios.post(`${this.mcpEndpoint}/auth/initiate`, {
-        phone: phoneNumber.replace(/\s+/g, ''),
-        client: 'finix-ai-assistant'
-      }, {
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'FiNIX-AI-Assistant/1.0.0'
-        },
-        timeout: 10000
-      });
-
-      const { loginUrl, sessionId } = authResponse.data;
-
-      // Store session ID for this user
-      this.userTokens.set(`${userId}_session`, {
+      // Generate session ID for this user
+      const sessionId = this.generateSessionId();
+      
+      // Store session data
+      const sessionData = {
         sessionId,
+        phoneNumber: phoneNumber.replace(/\s+/g, ''),
         timestamp: Date.now(),
         status: 'pending'
-      });
-
+      };
+      
+      this.userSessions.set(userId, sessionData);
+      
       logger.logFiMCPInteraction(userId, 'auth_initiated', { 
         success: true, 
-        sessionId: sessionId.substring(0, 8) + '...' 
+        phoneNumber: phoneNumber.replace(/\s+/g, ''),
+        sessionId
       });
 
       return {
         success: true,
-        loginUrl,
         sessionId,
+        loginUrl: `http://localhost:8080/mockWebPage?sessionId=${sessionId}`,
         instructions: [
-          '1. Click the login link to open Fi Money authentication',
-          '2. Enter your Fi-registered phone number',
-          '3. Open Fi Money app',
-          '4. Navigate to Net Worth Dashboard > Talk to AI > Get Passcode',
-          '5. Copy the passcode and provide it to continue'
-        ]
+          '✅ Phone number validated successfully!',
+          '',
+          '📱 **Next Steps:**',
+          '1. Click the login link below',
+          '2. Enter your phone number on the login page',
+          '3. Use any OTP (e.g., 123456)',
+          '4. Return here and click "Complete Authentication"',
+          '',
+          '🔗 **Login Link:**',
+          `http://localhost:8080/mockWebPage?sessionId=${sessionId}`,
+          '',
+          '⏰ **Note:** Session expires in 30 minutes'
+        ],
+        phoneNumber: phoneNumber.replace(/\s+/g, '')
       };
 
     } catch (error) {
@@ -76,73 +114,51 @@ class FiMcpService {
         error: error.message 
       });
 
-      throw new Error(`Failed to initiate Fi MCP authentication: ${error.message}`);
+      throw new Error(`Authentication initiation failed: ${error.message}`);
     }
   }
 
   /**
-   * Complete Fi MCP authentication with passcode
-   * @param {string} userId - User ID from Firebase
-   * @param {string} passcode - Passcode from Fi Money app
-   * @returns {Object} Authentication result with token
+   * Complete Fi MCP authentication by testing the session
    */
   async completeAuthentication(userId, passcode) {
     try {
       logger.logFiMCPInteraction(userId, 'complete_auth', { passcode: 'provided' });
 
-      // Validate passcode format (assuming 6-digit numeric)
-      if (!passcode || !/^\d{6}$/.test(passcode)) {
-        throw new Error('Invalid passcode format. Expected 6-digit numeric code.');
-      }
-
-      // Get session ID for this user
-      const sessionData = this.userTokens.get(`${userId}_session`);
+      // Get session data for this user
+      const sessionData = this.userSessions.get(userId);
       if (!sessionData || sessionData.status !== 'pending') {
         throw new Error('No pending authentication session found. Please initiate authentication first.');
       }
 
-      // Check session timeout (5 minutes for passcode entry)
-      if (Date.now() - sessionData.timestamp > 5 * 60 * 1000) {
-        this.userTokens.delete(`${userId}_session`);
+      // Check session timeout
+      if (Date.now() - sessionData.timestamp > this.sessionExpiry) {
+        this.userSessions.delete(userId);
         throw new Error('Authentication session expired. Please start again.');
       }
 
-      // Step 2: Complete authentication with passcode
-      const authResponse = await axios.post(`${this.mcpEndpoint}/auth/complete`, {
-        sessionId: sessionData.sessionId,
-        passcode: passcode
-      }, {
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'FiNIX-AI-Assistant/1.0.0'
-        },
-        timeout: 10000
-      });
+      // Test the session by making a simple MCP call
+      const testResult = await this.makeMcpCall(sessionData.sessionId, 'tools/list', {});
+      
+      if (testResult.error) {
+        throw new Error('Session not authenticated. Please complete login on the MCP server first.');
+      }
 
-      const { token, expiresAt, netWorthSummary } = authResponse.data;
-
-      // Store the authentication token
-      this.userTokens.set(userId, {
-        token,
-        expiresAt: new Date(expiresAt),
-        timestamp: Date.now(),
-        netWorthSummary
-      });
-
-      // Clean up session data
-      this.userTokens.delete(`${userId}_session`);
+      // Update session status
+      sessionData.status = 'authenticated';
+      sessionData.authenticatedAt = Date.now();
 
       logger.logFiMCPInteraction(userId, 'auth_completed', { 
-        success: true,
-        tokenExpiry: expiresAt
+        success: true, 
+        phoneNumber: sessionData.phoneNumber 
       });
 
       return {
         success: true,
-        authenticated: true,
-        expiresAt,
-        netWorthSummary,
-        message: 'Successfully authenticated with Fi MCP. You can now ask questions about your finances!'
+        message: 'Fi MCP authentication completed successfully!',
+        sessionId: sessionData.sessionId,
+        expiresIn: this.sessionExpiry,
+        phoneNumber: sessionData.phoneNumber
       };
 
     } catch (error) {
@@ -151,25 +167,22 @@ class FiMcpService {
         error: error.message 
       });
 
-      // Clean up session on failure
-      this.userTokens.delete(`${userId}_session`);
-
-      throw new Error(`Failed to complete Fi MCP authentication: ${error.message}`);
+      throw new Error(`Authentication failed: ${error.message}`);
     }
   }
 
   /**
-   * Check if user has valid Fi MCP authentication
-   * @param {string} userId - User ID from Firebase
-   * @returns {boolean} True if authenticated and token is valid
+   * Check if user is authenticated with Fi MCP
    */
   isAuthenticated(userId) {
-    const tokenData = this.userTokens.get(userId);
-    if (!tokenData) return false;
+    const sessionData = this.userSessions.get(userId);
+    if (!sessionData || sessionData.status !== 'authenticated') {
+      return false;
+    }
 
-    // Check if token is expired
-    if (new Date() > tokenData.expiresAt) {
-      this.userTokens.delete(userId);
+    // Check if session is expired
+    if (Date.now() - sessionData.authenticatedAt > this.sessionExpiry) {
+      this.userSessions.delete(userId);
       return false;
     }
 
@@ -177,220 +190,277 @@ class FiMcpService {
   }
 
   /**
-   * Get user's net worth data
-   * @param {string} userId - User ID from Firebase
-   * @returns {Object} Net worth data from Fi MCP
+   * Get user's net worth data from Fi MCP server
    */
   async getNetWorth(userId) {
     if (!this.isAuthenticated(userId)) {
-      throw new Error('Fi MCP authentication required. Please authenticate first.');
+      throw new Error('User not authenticated with Fi MCP');
     }
 
     try {
-      const tokenData = this.userTokens.get(userId);
-      
-      const response = await axios.get(`${this.mcpEndpoint}/data/networth`, {
-        headers: {
-          'Authorization': `Bearer ${tokenData.token}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'FiNIX-AI-Assistant/1.0.0'
-        },
-        timeout: 15000
+      logger.logFiMCPInteraction(userId, 'get_net_worth');
+
+      const sessionData = this.userSessions.get(userId);
+      const result = await this.makeMcpCall(sessionData.sessionId, 'tools/call', {
+        name: 'fetch_net_worth',
+        arguments: {}
       });
 
-      logger.logFiMCPInteraction(userId, 'get_networth', { success: true });
-      
-      return response.data;
+      if (result.error) {
+        throw new Error(result.error.message || 'Failed to fetch net worth');
+      }
+
+      logger.logFiMCPInteraction(userId, 'net_worth_retrieved', { success: true });
+      return result.result;
 
     } catch (error) {
-      logger.error('Fi MCP get net worth failed:', error);
-      logger.logFiMCPInteraction(userId, 'get_networth_failed', { error: error.message });
-      
-      if (error.response?.status === 401) {
-        this.userTokens.delete(userId);
-        throw new Error('Fi MCP session expired. Please authenticate again.');
-      }
-      
-      throw new Error(`Failed to fetch net worth data: ${error.message}`);
+      logger.error('Failed to get net worth:', error);
+      logger.logFiMCPInteraction(userId, 'net_worth_failed', { error: error.message });
+      throw new Error(`Failed to get net worth: ${error.message}`);
     }
   }
 
   /**
-   * Get mutual fund holdings and performance
-   * @param {string} userId - User ID from Firebase
-   * @returns {Object} Mutual fund data from Fi MCP
+   * Get user's mutual funds data from Fi MCP server
    */
   async getMutualFunds(userId) {
     if (!this.isAuthenticated(userId)) {
-      throw new Error('Fi MCP authentication required. Please authenticate first.');
+      throw new Error('User not authenticated with Fi MCP');
     }
 
     try {
-      const tokenData = this.userTokens.get(userId);
-      
-      const response = await axios.get(`${this.mcpEndpoint}/data/mutualfunds`, {
-        headers: {
-          'Authorization': `Bearer ${tokenData.token}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'FiNIX-AI-Assistant/1.0.0'
-        },
-        timeout: 15000
+      logger.logFiMCPInteraction(userId, 'get_mutual_funds');
+
+      const sessionData = this.userSessions.get(userId);
+      const result = await this.makeMcpCall(sessionData.sessionId, 'tools/call', {
+        name: 'fetch_mutual_fund_transactions',
+        arguments: {}
       });
 
-      logger.logFiMCPInteraction(userId, 'get_mutual_funds', { success: true });
-      
-      return response.data;
+      if (result.error) {
+        throw new Error(result.error.message || 'Failed to fetch mutual funds');
+      }
+
+      logger.logFiMCPInteraction(userId, 'mutual_funds_retrieved', { success: true });
+      return result.result;
 
     } catch (error) {
-      logger.error('Fi MCP get mutual funds failed:', error);
-      logger.logFiMCPInteraction(userId, 'get_mutual_funds_failed', { error: error.message });
-      
-      if (error.response?.status === 401) {
-        this.userTokens.delete(userId);
-        throw new Error('Fi MCP session expired. Please authenticate again.');
-      }
-      
-      throw new Error(`Failed to fetch mutual fund data: ${error.message}`);
+      logger.error('Failed to get mutual funds:', error);
+      logger.logFiMCPInteraction(userId, 'mutual_funds_failed', { error: error.message });
+      throw new Error(`Failed to get mutual funds: ${error.message}`);
     }
   }
 
   /**
-   * Get stock holdings (Indian and US)
-   * @param {string} userId - User ID from Firebase
-   * @returns {Object} Stock holdings data from Fi MCP
+   * Get user's bank transactions from Fi MCP server
    */
-  async getStocks(userId) {
+  async getBankTransactions(userId) {
     if (!this.isAuthenticated(userId)) {
-      throw new Error('Fi MCP authentication required. Please authenticate first.');
+      throw new Error('User not authenticated with Fi MCP');
     }
 
     try {
-      const tokenData = this.userTokens.get(userId);
-      
-      const response = await axios.get(`${this.mcpEndpoint}/data/stocks`, {
-        headers: {
-          'Authorization': `Bearer ${tokenData.token}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'FiNIX-AI-Assistant/1.0.0'
-        },
-        timeout: 15000
+      logger.logFiMCPInteraction(userId, 'get_bank_transactions');
+
+      const sessionData = this.userSessions.get(userId);
+      const result = await this.makeMcpCall(sessionData.sessionId, 'tools/call', {
+        name: 'fetch_bank_transactions',
+        arguments: {}
       });
 
-      logger.logFiMCPInteraction(userId, 'get_stocks', { success: true });
-      
-      return response.data;
+      if (result.error) {
+        throw new Error(result.error.message || 'Failed to fetch bank transactions');
+      }
+
+      logger.logFiMCPInteraction(userId, 'bank_transactions_retrieved', { success: true });
+      return result.result;
 
     } catch (error) {
-      logger.error('Fi MCP get stocks failed:', error);
-      logger.logFiMCPInteraction(userId, 'get_stocks_failed', { error: error.message });
-      
-      if (error.response?.status === 401) {
-        this.userTokens.delete(userId);
-        throw new Error('Fi MCP session expired. Please authenticate again.');
-      }
-      
-      throw new Error(`Failed to fetch stock data: ${error.message}`);
+      logger.error('Failed to get bank transactions:', error);
+      logger.logFiMCPInteraction(userId, 'bank_transactions_failed', { error: error.message });
+      throw new Error(`Failed to get bank transactions: ${error.message}`);
     }
   }
 
   /**
-   * Get loan and credit card information
-   * @param {string} userId - User ID from Firebase
-   * @returns {Object} Loans and credit card data from Fi MCP
+   * Get user's EPF details from Fi MCP server
    */
-  async getLoansAndCreditCards(userId) {
+  async getEpfDetails(userId) {
     if (!this.isAuthenticated(userId)) {
-      throw new Error('Fi MCP authentication required. Please authenticate first.');
+      throw new Error('User not authenticated with Fi MCP');
     }
 
     try {
-      const tokenData = this.userTokens.get(userId);
-      
-      const response = await axios.get(`${this.mcpEndpoint}/data/liabilities`, {
-        headers: {
-          'Authorization': `Bearer ${tokenData.token}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'FiNIX-AI-Assistant/1.0.0'
-        },
-        timeout: 15000
+      logger.logFiMCPInteraction(userId, 'get_epf_details');
+
+      const sessionData = this.userSessions.get(userId);
+      const result = await this.makeMcpCall(sessionData.sessionId, 'tools/call', {
+        name: 'fetch_epf_details',
+        arguments: {}
       });
 
-      logger.logFiMCPInteraction(userId, 'get_liabilities', { success: true });
-      
-      return response.data;
+      if (result.error) {
+        throw new Error(result.error.message || 'Failed to fetch EPF details');
+      }
+
+      logger.logFiMCPInteraction(userId, 'epf_details_retrieved', { success: true });
+      return result.result;
 
     } catch (error) {
-      logger.error('Fi MCP get liabilities failed:', error);
-      logger.logFiMCPInteraction(userId, 'get_liabilities_failed', { error: error.message });
-      
-      if (error.response?.status === 401) {
-        this.userTokens.delete(userId);
-        throw new Error('Fi MCP session expired. Please authenticate again.');
-      }
-      
-      throw new Error(`Failed to fetch liability data: ${error.message}`);
+      logger.error('Failed to get EPF details:', error);
+      logger.logFiMCPInteraction(userId, 'epf_details_failed', { error: error.message });
+      throw new Error(`Failed to get EPF details: ${error.message}`);
     }
   }
 
   /**
-   * Get comprehensive financial portfolio analysis
-   * @param {string} userId - User ID from Firebase
-   * @returns {Object} Complete financial analysis from Fi MCP
+   * Get user's credit report from Fi MCP server
+   */
+  async getCreditReport(userId) {
+    if (!this.isAuthenticated(userId)) {
+      throw new Error('User not authenticated with Fi MCP');
+    }
+
+    try {
+      logger.logFiMCPInteraction(userId, 'get_credit_report');
+
+      const sessionData = this.userSessions.get(userId);
+      const result = await this.makeMcpCall(sessionData.sessionId, 'tools/call', {
+        name: 'fetch_credit_report',
+        arguments: {}
+      });
+
+      if (result.error) {
+        throw new Error(result.error.message || 'Failed to fetch credit report');
+      }
+
+      logger.logFiMCPInteraction(userId, 'credit_report_retrieved', { success: true });
+      return result.result;
+
+    } catch (error) {
+      logger.error('Failed to get credit report:', error);
+      logger.logFiMCPInteraction(userId, 'credit_report_failed', { error: error.message });
+      throw new Error(`Failed to get credit report: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get comprehensive portfolio analysis
    */
   async getPortfolioAnalysis(userId) {
     if (!this.isAuthenticated(userId)) {
-      throw new Error('Fi MCP authentication required. Please authenticate first.');
+      throw new Error('User not authenticated with Fi MCP');
     }
 
     try {
-      const tokenData = this.userTokens.get(userId);
-      
-      const response = await axios.get(`${this.mcpEndpoint}/data/analysis`, {
-        headers: {
-          'Authorization': `Bearer ${tokenData.token}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'FiNIX-AI-Assistant/1.0.0'
-        },
-        timeout: 15000
-      });
+      logger.logFiMCPInteraction(userId, 'get_portfolio_analysis');
 
-      logger.logFiMCPInteraction(userId, 'get_portfolio_analysis', { success: true });
-      
-      return response.data;
+      // Get all available data
+      const [netWorth, mutualFunds, bankTransactions, epfDetails] = await Promise.allSettled([
+        this.getNetWorth(userId),
+        this.getMutualFunds(userId),
+        this.getBankTransactions(userId),
+        this.getEpfDetails(userId)
+      ]);
+
+      const analysis = {
+        summary: {
+          netWorth: netWorth.status === 'fulfilled' ? netWorth.value : null,
+          mutualFunds: mutualFunds.status === 'fulfilled' ? mutualFunds.value : null,
+          bankTransactions: bankTransactions.status === 'fulfilled' ? bankTransactions.value : null,
+          epfDetails: epfDetails.status === 'fulfilled' ? epfDetails.value : null
+        },
+        availableData: {
+          netWorth: netWorth.status === 'fulfilled',
+          mutualFunds: mutualFunds.status === 'fulfilled',
+          bankTransactions: bankTransactions.status === 'fulfilled',
+          epfDetails: epfDetails.status === 'fulfilled'
+        },
+        lastUpdated: new Date().toISOString()
+      };
+
+      logger.logFiMCPInteraction(userId, 'portfolio_analysis_retrieved', { success: true });
+      return analysis;
 
     } catch (error) {
-      logger.error('Fi MCP get portfolio analysis failed:', error);
-      logger.logFiMCPInteraction(userId, 'get_portfolio_analysis_failed', { error: error.message });
-      
-      if (error.response?.status === 401) {
-        this.userTokens.delete(userId);
-        throw new Error('Fi MCP session expired. Please authenticate again.');
-      }
-      
-      throw new Error(`Failed to fetch portfolio analysis: ${error.message}`);
+      logger.error('Failed to get portfolio analysis:', error);
+      logger.logFiMCPInteraction(userId, 'portfolio_analysis_failed', { error: error.message });
+      throw new Error(`Failed to get portfolio analysis: ${error.message}`);
     }
   }
 
   /**
-   * Clean up expired tokens (call periodically)
+   * Disconnect Fi MCP authentication
    */
-  cleanupExpiredTokens() {
-    const now = new Date();
-    for (const [userId, tokenData] of this.userTokens.entries()) {
-      if (now > tokenData.expiresAt) {
-        this.userTokens.delete(userId);
-        logger.info(`Cleaned up expired token for user: ${userId}`);
+  disconnect(userId) {
+    try {
+      this.userSessions.delete(userId);
+      logger.logFiMCPInteraction(userId, 'disconnected', { success: true });
+      return { success: true, message: 'Fi MCP disconnected successfully' };
+    } catch (error) {
+      logger.error('Failed to disconnect Fi MCP:', error);
+      throw new Error(`Failed to disconnect: ${error.message}`);
+    }
+  }
+
+  /**
+   * Test MCP server connection
+   */
+  async testMcpConnection() {
+    try {
+      console.log('=== MCP SERVER CONNECTION TEST ===');
+      console.log('MCP Endpoint:', this.mcpEndpoint);
+      
+      // Test basic connection
+      const response = await axios.get('http://localhost:8080/health', {
+        timeout: 10000
+      });
+      
+      console.log('MCP Server Health Response:', response.status, response.data);
+      return {
+        connected: true,
+        status: response.status,
+        data: response.data
+      };
+    } catch (error) {
+      console.error('MCP Server Connection Failed:', error.message);
+      return {
+        connected: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Query stored session data (for debugging/verification)
+   */
+  queryStoredData(userId) {
+    const sessionData = this.userSessions.get(userId);
+    
+    console.log('=== SESSION DATA QUERY ===');
+    console.log('User ID:', userId);
+    console.log('Session Data:', sessionData);
+    console.log('All Sessions:', Array.from(this.userSessions.entries()));
+    console.log('=== END QUERY ===');
+    
+    return {
+      sessionData,
+      allSessions: Array.from(this.userSessions.entries())
+    };
+  }
+
+  /**
+   * Clean up expired sessions
+   */
+  cleanupExpiredSessions() {
+    const now = Date.now();
+    for (const [userId, sessionData] of this.userSessions.entries()) {
+      if (now - sessionData.timestamp > this.sessionExpiry) {
+        this.userSessions.delete(userId);
+        logger.info(`Cleaned up expired session for user: ${userId}`);
       }
     }
   }
 }
 
-// Create singleton instance
-const fiMcpService = new FiMcpService();
-
-// Cleanup expired tokens every 5 minutes
-setInterval(() => {
-  fiMcpService.cleanupExpiredTokens();
-}, 5 * 60 * 1000);
-
-module.exports = fiMcpService; 
+module.exports = new FiMcpService(); 
